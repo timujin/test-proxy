@@ -6,14 +6,16 @@ use Data::Dumper;
 
 mkdir "proxy_logs";
 
+my $print_bodies = 0;
+
 sub new_log_file() {
-	# A new file for every connection, because, with the server being asynchronous, data from several connection would mix
+	# A new file for every connection, because, with the server being asynchronous, data from several connections would mix
 	my $filename = "proxy_logs/" . localtime();
 	my $collision = 0;
-	while (-e $filename . ($collision or "")) {
+	while (-e $filename . (" #$collision" or "")) {
 		$collision += 1;
 	}
-	open (my $fh, '>', $filename . ($collision or ""));
+	open (my $fh, '>', $filename . (" #$collision" or ""));
 	return $fh;
 }
 
@@ -22,20 +24,19 @@ sub http_connect($$$) {
 	my $chdl = $_[1];
 	my $log = $_[2];
 	tcp_connect $s{host}, "http", sub {
-		my ($fh) = @_
-		or die "unable to connect: $!";
-
+		my ($fh) = @_ or print $log "Could not connect to server" and return;
+		print $log "Connecting to server $s{host}...\n";
 		my $hdl; $hdl = new AnyEvent::Handle
 			fh     => $fh,
 			on_error => sub {print $log  "Unhandled error(s)! " . Dumper(@_) },
 			on_eof => sub {
 				$hdl->destroy;
 				$chdl->destroy;
-				print $log  "----RESPONSE FINISH----";
+				print $log  "----RESPONSE FINISH----\n";
 			};
 
 		$hdl->push_write ("$s{method} $s{path} HTTP/1.1\015\012");
-		print $log "-----REQUEST START-----";
+		print $log "-----REQUEST START-----\n";
 		print $log  ("$s{method} $s{path} HTTP/1.1\015\012");
 
 		for (keys %{$s{headers}}) {
@@ -49,20 +50,20 @@ sub http_connect($$$) {
 			$chdl->on_read(sub {
 				# if the client body is big, it may mess up ordering of data in the logs; not in the actual sockets, however.
 				$hdl->push_write($_[0]->rbuf);
-				print $log $_[0]->rbuf;
+				if ($print_bodies) {print $log $_[0]->rbuf};
 				$_[0]->rbuf = "";
 			});
 		}
-		print $log  "-----REQUEST FINISH----";
+		print $log  "-----REQUEST FINISH----\n";
 
-		print $log  "-----RESPONSE START----";
+		print $log  "-----RESPONSE START----\n";
 		$hdl->push_read (line => "\015\012\015\012", sub {
 			my ($hdl, $line) = @_;
 			$chdl->push_write("$line\015\012\015\012");
 			print $log ("$line\015\012\015\012");
 			$hdl->on_read (sub {
 				$chdl->push_write($_[0]->rbuf);
-				print $log ($_[0]->rbuf);
+				if ($print_bodies) {print $log ($_[0]->rbuf)};
 				$_[0]->rbuf = "";
 			});
 		});
@@ -95,7 +96,6 @@ Content-Length: 230
 EOF
 	$chdl->push_write("$headers\r\n$body\r\n");
 	print $log ("$headers\r\n$body\r\n");
-	#$chdl->destroy;
 }
 
 sub CONNECT($$$) {
@@ -104,7 +104,8 @@ sub CONNECT($$$) {
 	my $log = $_[2];
 
 	tcp_connect $s{host}, 443, sub {
-		my ($fh) = @_;
+		my ($fh) = @_  or print $log "Could not connect to server" and return;
+		print $log "Connecting to server $s{host}...\n";
 
 		my $hdl; $hdl = new AnyEvent::Handle
 			fh     => $fh,
@@ -112,17 +113,15 @@ sub CONNECT($$$) {
 
 		$chdl->push_write("200 OK\015\012");
 		print $log "200 OK\015\012";
-
+		print $log "Streaming data back and forth...";
 		$hdl->on_read(sub { 
 			my $self = @_;
 			$chdl->push_write($_[0]->rbuf);
-			print $log $_[0]->rbuf;
 			$_[0]->rbuf = "";
 		});
 		$chdl->on_read(sub {
 			my $self = @_;
 			$hdl->push_write($_[0]->rbuf);
-			print $log $_[0]->rbuf;
 			$_[0]->rbuf = "";
 		});
 	}
@@ -142,7 +141,6 @@ tcp_server '127.0.0.1', '7777', sub {
 		($s{start_line}, $s{headers}) = split "\r\n", $rbuf, 2;
 		unless ($s{start_line} =~ m{^(?<method>GET|POST|CONNECT) (?<path>[^ ]+) (?<proto>HTTP/1\.[01])$}) {
 			print $log $s{start_line};
-			print $log  "400 Bad Request";
 			_400_bad_request($fh, $log);
 			$fh->destroy;
 			return;
@@ -154,7 +152,6 @@ tcp_server '127.0.0.1', '7777', sub {
 		for (@h) {
 			unless(m{(?<name>[a-zA-Z0-9-]+): *(?<value>.*)}) {
 				print $log  $_;
-				print $log "400 Bad Request";
 				_400_bad_request($fh, $log);
 				$fh->destroy;
 				return;
@@ -164,7 +161,6 @@ tcp_server '127.0.0.1', '7777', sub {
 		if ($s{method} eq "CONNECT") {
 			unless ($s{path} =~ "^(?<host>[0-9a-zA-z-\.]+):443") {
 				print $log $s{path};
-				print $log "400 Bad Request";
 				_400_bad_request($fh, $log);
 				$fh->destroy;
 				return;
@@ -178,13 +174,13 @@ tcp_server '127.0.0.1', '7777', sub {
 		if ($s{headers}{'Connection'}) { $s{headers}{'Connection'} = "close";}
 		unless ($s{path} =~ "http:\/\/(?<host>[0-9a-zA-z-\.]+)(?<path>\/.*)") {
 			print $log $s{path};
-			print $log "400 Bad Request";
 			_400_bad_request($fh, $log);
 			$fh->destroy;
 			return;
 		}
 
 		($s{host}, $s{path}) = ($+{host}, $+{path});
+		print $log "\n";
 		print $log Dumper \%s;
 		http_connect(\%s, $fh, $log);
 	});
