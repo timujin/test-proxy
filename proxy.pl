@@ -3,6 +3,7 @@ use warnings;
 use AnyEvent::Socket;
 use AnyEvent::Handle;
 use Data::Dumper; 
+use Time::HiRes qw(time);
 
 mkdir "proxy_logs";
 
@@ -19,10 +20,11 @@ sub new_log_file() {
 	return $fh;
 }
 
-sub http_connect($$$) {
+sub http_connect($$$$) {
 	my %s = %{$_[0]};
 	my $chdl = $_[1];
 	my $log = $_[2];
+	my $start_time = $_[3];
 	tcp_connect $s{host}, "http", sub {
 		my ($fh) = @_ or print $log "Could not connect to server" and return;
 		print $log "Connecting to server $s{host}...\n";
@@ -55,7 +57,7 @@ sub http_connect($$$) {
 			});
 		}
 		print $log  "-----REQUEST FINISH----\n";
-
+		print $log ("Processing the request took " . (time - $start_time) . " seconds\n");
 		print $log  "-----RESPONSE START----\n";
 		$hdl->push_read (line => "\015\012\015\012", sub {
 			my ($hdl, $line) = @_;
@@ -99,10 +101,11 @@ EOF
 	$chdl->destroy;
 }
 
-sub CONNECT($$$) {
+sub CONNECT($$$$) {
 	my %s = %{$_[0]};
 	my $chdl = $_[1];
 	my $log = $_[2];
+	my $start_time = $_[3];
 
 	tcp_connect $s{host}, 443, sub {
 		my ($fh) = @_  or print $log "Could not connect to server" and return;
@@ -114,6 +117,7 @@ sub CONNECT($$$) {
 
 		$chdl->push_write("200 OK\015\012");
 		print $log "200 OK\015\012";
+		print $log "Establishing connection took " . (time - $start_time) . " seconds.";
 		print $log "Streaming data back and forth...";
 		$hdl->on_read(sub { 
 			my $self = @_;
@@ -131,6 +135,7 @@ sub CONNECT($$$) {
 tcp_server '127.0.0.1', '7777', sub {
 	my ($fh, $host, $port) = @_;
 	my $log = new_log_file();
+	my $start_time = time;
 	print $log "Connect from $host:$port\n";
 	my %s;
 	$fh = AnyEvent::Handle->new(
@@ -165,7 +170,7 @@ tcp_server '127.0.0.1', '7777', sub {
 			}
 			$s{host} = $+{host};
 			print $log Dumper \%s;
-			CONNECT(\%s, $fh, $log);
+			CONNECT(\%s, $fh, $log, $start_time);
 			return
 		}
 
@@ -179,7 +184,7 @@ tcp_server '127.0.0.1', '7777', sub {
 		($s{host}, $s{path}) = ($+{host}, $+{path});
 		print $log "\n";
 		print $log Dumper \%s;
-		http_connect(\%s, $fh, $log);
+		http_connect(\%s, $fh, $log, $start_time);
 	});
 };
 
