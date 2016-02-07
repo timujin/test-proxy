@@ -96,6 +96,7 @@ Content-Length: 230
 EOF
 	$chdl->push_write("$headers\r\n$body\r\n");
 	print $log ("$headers\r\n$body\r\n");
+	$chdl->destroy;
 }
 
 sub CONNECT($$$) {
@@ -142,7 +143,6 @@ tcp_server '127.0.0.1', '7777', sub {
 		unless ($s{start_line} =~ m{^(?<method>GET|POST|CONNECT) (?<path>[^ ]+) (?<proto>HTTP/1\.[01])$}) {
 			print $log $s{start_line};
 			_400_bad_request($fh, $log);
-			$fh->destroy;
 			return;
 		}
 		delete $s{start_line};
@@ -153,7 +153,6 @@ tcp_server '127.0.0.1', '7777', sub {
 			unless(m{(?<name>[a-zA-Z0-9-]+): *(?<value>.*)}) {
 				print $log  $_;
 				_400_bad_request($fh, $log);
-				$fh->destroy;
 				return;
 			}
 			$s{headers}{$+{name}} = $+{value};
@@ -162,7 +161,6 @@ tcp_server '127.0.0.1', '7777', sub {
 			unless ($s{path} =~ "^(?<host>[0-9a-zA-z-\.]+):443") {
 				print $log $s{path};
 				_400_bad_request($fh, $log);
-				$fh->destroy;
 				return;
 			}
 			$s{host} = $+{host};
@@ -175,7 +173,6 @@ tcp_server '127.0.0.1', '7777', sub {
 		unless ($s{path} =~ "http:\/\/(?<host>[0-9a-zA-z-\.]+)(?<path>\/.*)") {
 			print $log $s{path};
 			_400_bad_request($fh, $log);
-			$fh->destroy;
 			return;
 		}
 
