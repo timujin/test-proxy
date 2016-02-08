@@ -25,16 +25,19 @@ sub http_connect($$$$) {
 	my $chdl = $_[1];
 	my $log = $_[2];
 	my $start_time = $_[3];
+	my $traffic_bytes = 0;
+
 	tcp_connect $s{host}, "http", sub {
 		my ($fh) = @_ or print $log "Could not connect to server" and return;
 		print $log "Connecting to server $s{host}...\n";
 		my $hdl; $hdl = new AnyEvent::Handle
 			fh     => $fh,
-			on_error => sub {print $log  "Unhandled error(s)! " . Dumper(@_) },
+			on_error => sub {print $log  "Unhandled error(s)! " . Dumper(@_); $traffic_bytes > 0 and  print $log "Incoming traffic - $traffic_bytes bytes.\n"; },
 			on_eof => sub {
 				$hdl->destroy;
 				$chdl->destroy;
 				print $log  "----RESPONSE FINISH----\n";
+				print $log "Incoming traffic - $traffic_bytes bytes.\n";
 			};
 
 		$hdl->push_write ("$s{method} $s{path} HTTP/1.1\015\012");
@@ -63,9 +66,15 @@ sub http_connect($$$$) {
 			my ($hdl, $line) = @_;
 			$chdl->push_write("$line\015\012\015\012");
 			print $log ("$line\015\012\015\012");
+			use bytes;
+				$traffic_bytes += length "$line\015\012\015\012";
+			no bytes;
 			$hdl->on_read (sub {
 				$chdl->push_write($_[0]->rbuf);
 				if ($print_bodies) {print $log ($_[0]->rbuf)};
+				use bytes;
+					$traffic_bytes += length $_[0]->rbuf;
+				no bytes;
 				$_[0]->rbuf = "";
 			});
 		});
@@ -106,6 +115,7 @@ sub CONNECT($$$$) {
 	my $chdl = $_[1];
 	my $log = $_[2];
 	my $start_time = $_[3];
+	my $traffic_bytes = 0;
 
 	tcp_connect $s{host}, 443, sub {
 		my ($fh) = @_  or print $log "Could not connect to server" and return;
@@ -113,15 +123,23 @@ sub CONNECT($$$$) {
 
 		my $hdl; $hdl = new AnyEvent::Handle
 			fh     => $fh,
-			on_error => sub {print $log "Unhandled error(s)! " . Dumper(@_) };
+			on_error => sub {print $log  "Unhandled error(s)! " . Dumper(@_); $traffic_bytes > 0 and  print $log "Incoming traffic - $traffic_bytes bytes.\n"; },
+			on_eof => sub {
+				$hdl->destroy;
+				$chdl->destroy;
+				print $log "Incoming traffic - $traffic_bytes bytes.\n";
+			};
 
 		$chdl->push_write("200 OK\015\012");
 		print $log "200 OK\015\012";
-		print $log "Establishing connection took " . (time - $start_time) . " seconds.";
-		print $log "Streaming data back and forth...";
+		print $log "Establishing connection took " . (time - $start_time) . " seconds.\n";
+		print $log "Streaming data back and forth...\n";
 		$hdl->on_read(sub { 
 			my $self = @_;
 			$chdl->push_write($_[0]->rbuf);
+			use bytes;
+				$traffic_bytes += length $_[0]->rbuf;
+			no bytes;
 			$_[0]->rbuf = "";
 		});
 		$chdl->on_read(sub {
